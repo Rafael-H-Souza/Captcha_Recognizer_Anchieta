@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Dados e modelos
+*.png          
+*.h5
+*.keras
+*.npy
+pattern_recognition_ai/data/processed/**/*.npy
+
+# Logs
+logs/
+*.log
+
+# Arquivos temporários
+*.zip 
+*.tmp
