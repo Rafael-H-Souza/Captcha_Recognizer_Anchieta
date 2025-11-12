@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from src.config import settings
 
-DEFAULT_NUM_IMAGES = 100
+DEFAULT_NUM_IMAGES = 30000
 DEFAULT_CHARSET = settings.config["charset"]
 DEFAULT_CAPTCHA_LENGTH = settings.config["max_length"]
 RAW_DATA_DIR = settings.config["raw_data_dir"]

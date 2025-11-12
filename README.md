@@ -176,3 +176,57 @@ IMAGE_HEIGHT=50
 ---
 Com esse fluxo você acompanha a performance de treinamento e aprendizagem em tempo real, identifica gargalos rapidamente e
 mantém um histórico completo de experimentos e entregas.
+[ Upload de Imagem ]
+          │
+          ▼
+[ Pré-processamento ]
+ (grayscale → CLAHE → binarização → limpeza de ruído → remoção de linhas → resize)
+          │
+          ▼
+[ Modelo de Rede Neural ]
+ (CNN → Dense → Softmax)
+          │
+          ▼
+[ Decodificação de Caracteres ]
+ (tipo + confiança)
+          │
+          ▼
+[ Debug / Visualização ]
+ (imagens intermediárias + tabela)
+          │
+          ▼
+[ Correção Manual / Histórico ]
+          │
+          ▼
+[ Exportação CSV ]
+
+
+Imagem Pré-processada
+        │
+      Conv2D (CNN)
+        │
+      Pooling / Flatten
+        │
+     Dense (Fully Connected)
+        │
+     Softmax → Probabilidades por Classe
+        │
+   Char mais provável → Saída
+
+
+                ┌────────────────────────────┐
+                │        Entrada (50x200x1)  │
+                └────────────┬───────────────┘
+                             │
+         ┌───────────────────┼─────────────────────┐
+         │                   │                     │
+┌────────▼────────┐  ┌───────▼────────┐    ┌───────▼────────┐
+│ Modelo A        │  │ Modelo B       │    │ Modelo C       │
+│ single_char_num │  │ five_char_numb │    │ single_char_le │
+└────────┬────────┘  └───────┬────────┘    └───────┬────────┘
+         │                   │                     │
+         └───────────┬───────┴─────────────┬───────┘
+                     ▼                     ▼
+              [Concatenação das saídas → merged_output]
+                             │
+                      Modelo final unificado

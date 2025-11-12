@@ -1,180 +1,223 @@
-import argparse
-import os
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Relatório consolidado de performance de modelos de IA (CAPTCHA predictor).
+Versão hardening — coleta automática de todos os JSONs em qualquer subpasta (type/subtype).
+"""
+
 import sys
+import os
 import logging
+from pathlib import Path
 from datetime import datetime
+import json
 import pandas as pd
 from tabulate import tabulate
-from src.config import settings
-
 
 # ==============================================
-# 🧩 CONFIGURAÇÃO DE LOGGING
+# Configuração de diretórios
 # ==============================================
-LOG_DIR = os.path.join(settings.config["logs_dir"], "reports")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = os.path.join(LOG_DIR, "report_generation.log")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOGS_DIR = PROJECT_ROOT / "logs" / "reports"
+EVAL_DIRS = [
+    PROJECT_ROOT / "logs" / "evaluation",
+    PROJECT_ROOT / "logs" / "evaluatio",
+    PROJECT_ROOT / "logs" / "eval"
+]
 
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOGS_DIR / "evaluation_report.log"
+
+# ==============================================
+# Configuração de logging
+# ==============================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout)
-    ]
+        logging.StreamHandler(sys.stdout),
+    ],
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("report")
+
+# ==============================================
+# Função: coletar relatórios JSON
+# ==============================================
+def collect_json_reports() -> list[Path]:
+    """Busca recursivamente relatórios JSON em múltiplas pastas possíveis."""
+    found = []
+    for directory in EVAL_DIRS:
+        if directory.exists():
+            found.extend(directory.rglob("*.json"))
+    return list({f.resolve() for f in found})  # remove duplicados
 
 
-def generate_report(target_accuracy: float, project_deadline_str: str) -> None:
-    log_file = os.path.join(settings.config["logs_dir"], "evaluation", "evaluation_log.csv")
+# ==============================================
+# Função: consolidar relatórios JSON
+# ==============================================
+def consolidate_reports() -> pd.DataFrame:
+    """Lê todos os relatórios JSON e extrai métricas com detecção de tipo/subtipo."""
+    records = []
+    json_files = collect_json_reports()
 
-    logger.info("Iniciando geração de relatório de progresso.")
-    logger.info(f"Arquivo de log esperado: {log_file}")
+    if not json_files:
+        logger.warning("❌ Nenhum relatório JSON encontrado em logs/evaluation/.")
+        return pd.DataFrame()
 
-    # 1️⃣ Verifica existência
-    if not os.path.exists(log_file):
-        logger.error("Arquivo 'evaluation_log.csv' não encontrado.")
-        print("❌ Arquivo de log 'evaluation_log.csv' não encontrado.")
-        print("💡 Execute 'make evaluate' para gerar o log antes do relatório.")
+    logger.info(f"📂 Encontrados {len(json_files)} relatórios JSON...")
+
+    for report_file in json_files:
+        try:
+            with open(report_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # Inferência de type e subtype pela estrutura de pastas
+            rel_path = report_file.relative_to(PROJECT_ROOT)
+            parts = rel_path.parts
+            type_, subtype = "unknown", "unknown"
+            for i, p in enumerate(parts):
+                if p in ("evaluation", "evaluatio", "eval") and i + 2 < len(parts):
+                    type_, subtype = parts[i + 1], parts[i + 2]
+                    break
+
+            record = {
+                "timestamp": data.get("timestamp", datetime.now().isoformat()),
+                "model_name": data.get("model_name", report_file.stem),
+                "accuracy": float(data.get("accuracy", data.get("acc", 0.0))),
+                "val_accuracy": float(data.get("val_accuracy", 0.0)),
+                "loss": float(data.get("loss", 0.0)),
+                "val_loss": float(data.get("val_loss", 0.0)),
+                "image_count": int(data.get("images", data.get("image_count", 0))),
+                "epochs": int(data.get("epochs", 0)),
+                "type": type_,
+                "subtype": subtype,
+                "source_file": str(rel_path),
+            }
+            records.append(record)
+
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao processar {report_file.name}: {e}")
+
+    df = pd.DataFrame(records)
+    logger.info(f"✅ {len(df)} relatórios válidos consolidados.")
+    return df
+
+
+# ==============================================
+# Geração de relatório consolidado
+# ==============================================
+def generate_report(target_accuracy: float, project_deadline_str: str):
+    report_csv = LOGS_DIR / "evaluation_report.csv"
+    report_history = LOGS_DIR / "report_history.csv"
+
+    df = consolidate_reports()
+    if df.empty:
+        logger.error("❌ Nenhum relatório válido encontrado.")
         return
 
-    # 2️⃣ Verifica se está vazio
-    if os.path.getsize(log_file) == 0:
-        logger.warning("Arquivo 'evaluation_log.csv' está vazio.")
-        print("⚠️ O arquivo 'evaluation_log.csv' está vazio.")
-        print("💡 Execute 'make evaluate' para gerar as métricas primeiro.")
-        return
-
-    # 3️⃣ Leitura segura
-    try:
-        df = pd.read_csv(log_file)
-        logger.info(f"{len(df)} registros carregados do log.")
-    except pd.errors.EmptyDataError:
-        logger.error("Nenhum dado válido encontrado no CSV.")
-        print("⚠️ Nenhum dado válido encontrado em 'evaluation_log.csv'.")
-        return
-    except Exception as e:
-        logger.exception(f"Erro ao ler o CSV: {e}")
-        print(f"❌ Erro ao ler '{log_file}': {e}")
-        return
-
-    # 4️⃣ Colunas obrigatórias
-    required_cols = {"timestamp", "accuracy", "loss", "image_count"}
-    missing_cols = required_cols - set(df.columns)
-    if missing_cols:
-        logger.error(f"Colunas ausentes: {missing_cols}")
-        print(f"⚠️ Arquivo incompleto. Faltando colunas: {', '.join(missing_cols)}")
-        return
-
-    # 5️⃣ Conversões e cálculos
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
-    df["type"] = df.get("type", "N/A")
-    df["subtype"] = df.get("subtype", "N/A")
+    # Conversões e cálculos
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce").fillna(datetime.now())
     df["progress_percentage"] = (df["accuracy"] / target_accuracy * 100).round(2)
 
-    # 6️⃣ Prazo e status
     try:
-        project_deadline = datetime.strptime(project_deadline_str, "%Y-%m-%d")
-        df["days_remaining"] = (project_deadline - df["timestamp"]).dt.days
-        df["required_daily_gain"] = df.apply(
-            lambda row: ((target_accuracy - row["accuracy"]) / row["days_remaining"])
-            if row["days_remaining"] > 0 else 0,
-            axis=1
-        )
-        df["status"] = df["days_remaining"].apply(
-            lambda x: "Dentro do Prazo" if x > 0 else "Atrasado"
-        )
-    except ValueError:
-        logger.warning("Prazo inválido. Use o formato YYYY-MM-DD.")
-        project_deadline = None
+        deadline = datetime.strptime(project_deadline_str, "%Y-%m-%d")
+        df["days_remaining"] = (deadline - df["timestamp"]).dt.days.clip(lower=0)
+    except Exception:
         df["days_remaining"] = None
-        df["required_daily_gain"] = None
-        df["status"] = "Prazo Inválido"
 
-    # 7️⃣ Última avaliação
-    latest_eval = df.sort_values(by="timestamp", ascending=False).iloc[0]
+    # Agrupamento
+    grouped = (
+        df.groupby(["type", "subtype"], dropna=False)
+        .agg(
+            total_models=("model_name", "count"),
+            total_images=("image_count", "sum"),
+            avg_accuracy=("accuracy", "mean"),
+            avg_val_acc=("val_accuracy", "mean"),
+            avg_loss=("loss", "mean"),
+            avg_val_loss=("val_loss", "mean"),
+            avg_progress=("progress_percentage", "mean"),
+        )
+        .reset_index()
+    )
 
-    # ===============================================
-    # 🧾 EXIBIÇÃO DO RELATÓRIO
-    # ===============================================
-    print("\n" + "=" * 60)
-    print("📊 RELATÓRIO DE PROGRESSO DO MODELO DE IA")
-    print("=" * 60)
-    print(f"Última Avaliação: {latest_eval['timestamp'].strftime('%d/%m/%Y %H:%M')}")
-    print("-" * 60)
-    print("🎯 DESEMPENHO ATUAL")
-    print(f"  - Acurácia Atual:         {latest_eval['accuracy']:.2%}")
-    print(f"  - Acurácia Alvo:          {target_accuracy:.2%}")
-    print(f"  - Progresso para o Alvo:  {latest_eval['progress_percentage']:.2f}%")
-    print(f"  - Loss Atual:             {latest_eval['loss']:.4f}")
-    print(f"  - Imagens Processadas:    {int(latest_eval['image_count'])}")
+    # Salvar CSV principal
+    grouped.to_csv(report_csv, index=False)
+    logger.info(f"📁 CSV consolidado salvo em: {report_csv}")
 
-    print("\n🗓️ ACOMPANHAMENTO DE PRAZOS")
-    if project_deadline is None:
-        print("  - ❌ Prazo inválido informado.")
-    else:
-        print(f"  - Prazo Final:            {project_deadline.strftime('%d/%m/%Y')}")
-        print(f"  - Dias Restantes:         {int(latest_eval['days_remaining'])}")
-        print(f"  - Ganho Diário Necessário: {latest_eval['required_daily_gain']:.3%}")
-        print(f"  - Status:                 {latest_eval['status']}")
+    # Atualizar histórico
+    summary = {
+        "timestamp": datetime.now().isoformat(),
+        "acc_mean": df["accuracy"].mean(),
+        "val_acc_mean": df["val_accuracy"].mean(),
+        "loss_mean": df["loss"].mean(),
+        "val_loss_mean": df["val_loss"].mean(),
+        "progress_mean": df["progress_percentage"].mean(),
+    }
+    pd.DataFrame([summary]).to_csv(
+        report_history, mode="a", header=not report_history.exists(), index=False
+    )
 
-    # 8️⃣ Agrupamento
-    grouped = df.groupby(["type", "subtype"], dropna=False).agg(
-        total_images=("image_count", "sum"),
-        avg_accuracy=("accuracy", "mean"),
-        avg_loss=("loss", "mean"),
-        avg_progress=("progress_percentage", "mean")
-    ).reset_index()
+    # ==========================================
+    # Impressão de resumo
+    # ==========================================
+    print("\n" + "=" * 70)
+    print("📊 RELATÓRIO CONSOLIDADO DE MODELOS")
+    print("=" * 70)
+    latest = df.sort_values("timestamp", ascending=False).iloc[0]
+    print(f"🕒 Última Atualização: {latest['timestamp']:%d/%m/%Y %H:%M}")
+    print(f"🎯 Acurácia Atual:    {latest['accuracy']:.2%}")
+    print(f"🎯 Acurácia Alvo:     {target_accuracy:.2%}")
+    print(f"📈 Progresso:         {latest['progress_percentage']:.2f}%")
+    print(f"📉 Loss Atual:        {latest['loss']:.4f}")
+    print(f"🖼️  Imagens:           {int(latest['image_count'])}")
+    print(f"🔢 Épocas:             {int(latest['epochs'])}")
 
-    print("\n📌 MÉTRICAS POR TIPO E SUBTIPO")
+    print("\n📌 MÉTRICAS AGRUPADAS POR TIPO E SUBTIPO")
     print(tabulate(
         grouped,
-        headers=["Tipo", "Subtipo", "Total Imagens", "Acurácia Média", "Loss Média", "Progresso Médio (%)"],
+        headers=[
+            "Tipo", "Subtipo", "Modelos", "Total Imagens",
+            "Acurácia Média", "Val Acc Média", "Loss Média", "Val Loss Média", "Progresso (%)"
+        ],
         tablefmt="fancy_grid",
-        floatfmt=(".0f", ".0f", ".4f", ".4f", ".2f")
+        floatfmt=(".0f", ".0f", ".2%", ".2%", ".4f", ".4f", ".2f"),
     ))
 
-    # 9️⃣ Média total
-    total_images = df["image_count"].sum()
-    overall_accuracy = df["accuracy"].mean()
-    overall_loss = df["loss"].mean()
-    overall_progress = df["progress_percentage"].mean()
-
-    print("\n📊 MÉTRICAS GERAIS")
+    print("\n📈 MÉTRICAS GERAIS DO PROJETO")
     print(tabulate([[
-        total_images, overall_accuracy, overall_loss, overall_progress
+        df["image_count"].sum(),
+        df["accuracy"].mean(),
+        df["val_accuracy"].mean(),
+        df["loss"].mean(),
+        df["val_loss"].mean(),
+        df["progress_percentage"].mean()
     ]],
-        headers=["Total Imagens", "Acurácia Média", "Loss Média", "Progresso Médio (%)"],
+        headers=["Total Imagens", "Acc Média", "Val Acc Média", "Loss Média", "Val Loss Média", "Progresso (%)"],
         tablefmt="fancy_grid",
-        floatfmt=(".0f", ".2%", ".4f", ".2f")
+        floatfmt=(".0f", ".2%", ".2%", ".4f", ".4f", ".2f"),
     ))
 
-    # 🔟 Salva histórico completo
-    history_dir = os.path.join(settings.config["logs_dir"], "evaluation")
-    os.makedirs(history_dir, exist_ok=True)
-    history_file = os.path.join(history_dir, "report_history.csv")
-
-    try:
-        write_mode = "a" if os.path.exists(history_file) else "w"
-        header_flag = not os.path.exists(history_file)
-        df.to_csv(history_file, mode=write_mode, header=header_flag, index=False)
-        logger.info(f"Histórico salvo: {history_file}")
-        print(f"\n✅ Histórico salvo em: {history_file}")
-    except Exception as e:
-        logger.exception(f"Erro ao salvar histórico: {e}")
-        print(f"⚠️ Erro ao salvar histórico: {e}")
-
-    logger.info("✅ Relatório gerado com sucesso.")
+    print(f"\n✅ Histórico salvo em: {report_history.resolve()}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Gera relatório de progresso do modelo.")
-    parser.add_argument("--target", type=float, default=0.98, help="Acurácia alvo (ex: 0.98)")
-    parser.add_argument("--deadline", type=str, default="2026-12-31", help="Prazo final (YYYY-MM-DD)")
+# ==============================================
+# MAIN
+# ==============================================
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Gera relatório consolidado de progresso dos modelos.")
+    parser.add_argument("--target", type=float, default=0.95, help="Acurácia alvo (ex: 0.95)")
+    parser.add_argument("--deadline", type=str, default="2025-11-14", help="Prazo final (YYYY-MM-DD)")
     args = parser.parse_args()
 
-    generate_report(target_accuracy=args.target, project_deadline_str=args.deadline)
+    logger.info("🚀 Iniciando geração de relatório...")
+    try:
+        generate_report(target_accuracy=args.target, project_deadline_str=args.deadline)
+    except Exception as e:
+        logger.exception(f"❌ Erro ao gerar relatório: {e}")
+        print(f"❌ Erro ao gerar relatório: {e}")
 
 
 if __name__ == "__main__":

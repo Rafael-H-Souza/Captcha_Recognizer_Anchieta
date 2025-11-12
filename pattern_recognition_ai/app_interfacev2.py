@@ -1,23 +1,62 @@
 import os
-import re
-import streamlit as st
-from PIL import Image
-import pandas as pd
-import numpy as np
 import cv2
-from src.config.settings import config
+import numpy as np
+import pandas as pd
+import streamlit as st
+from datetime import datetime
+from PIL import Image
+import logging
+from pathlib import Path
+
+# app_interfacev2.py
 from src.inference.predictor import Predictor
 
 # ======================================================
-# Configuração da página
+# ⚙️ Caminhos e Configurações de Modelo
+# ======================================================
+def get_model_path(mode="all_models_unified"):
+    """Retorna o caminho do modelo conforme o modo."""
+    base = Path("models/exported")
+    mapping = {
+        "all_models_unified": "all_models_unified.keras",
+        "five_char_alphanumeric": "five_char_alphanumeric_model.keras",
+        "five_char_numb": "five_char_numb_model.keras",
+        "five_char_world": "five_char_world_model.keras",
+    }
+    return str(base / mapping.get(mode, mapping["all_models_unified"]))
+
+config = {
+    "logs_dir": "logs",
+    "final_model_path": get_model_path("all_models_unified"),  # modelo inicial
+}
+
+# ======================================================
+# ⚙️ Configuração de Logs
+# ======================================================
+LOG_DIR = Path(config["logs_dir"]) / "streamlit"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+log_file = LOG_DIR / f"ui_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] - %(message)s",
+    handlers=[
+        logging.FileHandler(log_file, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("streamlit_ui")
+logger.info("🚀 Iniciando interface Streamlit de Validação de CAPTCHA")
+
+# ======================================================
+# ⚙️ Configuração da Página
 # ======================================================
 st.set_page_config(
-    page_title="Validador CAPTCHA IA",
+    page_title="Validador de CAPTCHA IA",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 st.title("🤖 Validador Automático de CAPTCHA")
 st.markdown("### Sistema de Reconhecimento de CAPTCHAs com IA")
 
@@ -25,36 +64,57 @@ st.markdown("### Sistema de Reconhecimento de CAPTCHAs com IA")
 # Sidebar - Configurações
 # ======================================================
 st.sidebar.header("⚙️ Configurações")
-debug_mode = st.sidebar.checkbox("Modo Debug", value=False, key="debug_mode")
-show_history = st.sidebar.checkbox("Mostrar Histórico", value=True, key="show_history")
+model_option = st.sidebar.selectbox(
+    "Selecione o modelo:",
+    [   "all_models_unified" ,      
+        "five_char_alphanumeric",
+        "five_char_numb",
+        "five_char_world",
+    ],
+    index=0
+)
+debug_mode = st.sidebar.checkbox("Modo Debug", value=False)
+show_history = st.sidebar.checkbox("Mostrar Histórico de Predições", value=True)
+
+# Atualiza caminho do modelo
+config["final_model_path"] = get_model_path(model_option)
 
 # ======================================================
 # 🧠 Carregar modelo (cacheado)
 # ======================================================
 @st.cache_resource
-def load_predictor(debug=False):
-    """
-    Carrega o modelo automaticamente, sem mostrar ensemble.
-    """
-    try:
-        #predictor = Predictor(model_path=None, debug=debug, compile_models=False)
-        predictor = Predictor(model_path=None, debug=debug)
-        st.success("✅ Modelo carregado com sucesso!")
-        return predictor
-    except Exception as e:
-        st.error(f"⚠️ Não foi possível carregar o modelo: {e}")
+def load_model(model_path, debug=False):
+    logger.info(f"🧠 Carregando modelo: {model_path}")
+    if not os.path.exists(model_path):
+        logger.error(f"❌ Modelo não encontrado: {model_path}")
+        st.error(f"Modelo não encontrado: {model_path}")
         return None
+    predictor = Predictor(model_path, debug=debug)
+    logger.info("✅ Modelo carregado com sucesso.")
+    return predictor
 
-predictor = load_predictor(debug=debug_mode)
-
+predictor = load_model(config["final_model_path"], debug=debug_mode)
 if predictor is None:
-    st.warning("⚠️ Modelo não carregado. Predições não estarão disponíveis.")
+    st.stop()
 
 # ======================================================
-# Inicializa histórico
+# Sessão de Histórico
 # ======================================================
 if "history" not in st.session_state:
     st.session_state.history = []
+
+# ======================================================
+# Função utilitária para ajustar detalhes de confiança
+# ======================================================
+def normalize_confidence(details: list):
+    """Multiplica confidences por 100 se forem numéricas."""
+    if details:
+        df_details = pd.DataFrame(details)
+        for col in ["confidence", "confidence_alpha", "confidence_number"]:
+            if col in df_details.columns:
+                df_details[col] = df_details[col].apply(lambda x: x*100 if isinstance(x, (float, int)) else x)
+        return df_details
+    return None
 
 # ======================================================
 # Abas principais
@@ -67,190 +127,135 @@ tab1, tab2, tab3, tab4 = st.tabs([
 ])
 
 # ======================================================
-# ABA 1 - Upload Manual
+# 📤 ABA 1 - Upload Manual
 # ======================================================
 with tab1:
     st.subheader("📤 Envio Manual de CAPTCHA")
-    uploaded_file = st.file_uploader(
-        "Selecione uma imagem:", type=["png", "jpg", "jpeg"], key="upload_manual_tab1"
-    )
+    uploaded_file = st.file_uploader("Selecione uma imagem:", type=["png", "jpg", "jpeg"])
+
     if uploaded_file:
+        logger.info(f"📸 Imagem enviada: {uploaded_file.name}")
         image = Image.open(uploaded_file)
-        st.image(image, caption="Imagem enviada", width='stretch')
+        st.image(image, caption="Imagem enviada", use_column_width=True)
 
-        if predictor:
-            temp_dir = "data/tmp"
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_path = os.path.join(temp_dir, uploaded_file.name)
-            image.save(temp_path)
+        temp_dir = Path("data/tmp")
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = temp_dir / uploaded_file.name
+        image.save(temp_path)
 
-            with st.spinner("🔄 Processando imagem..."):
-                decoded_text, details = predictor.predict_with_details(temp_path)
+        with st.spinner("🔄 Processando imagem..."):
+            decoded_text, details = predictor.predict_with_details(str(temp_path))
 
-            # Calcula confiança média
-            confidence = np.mean([d.get("confidence", 0) for d in details]) if details else 0
+        logger.info(f"🧠 Resultado: {decoded_text}")
+        st.success(f"✅ Texto decodificado: **{decoded_text}**")
 
-            st.success(f"✅ Texto decodificado: **{decoded_text}**")
-            st.metric("Confiança Média (%)", f"{confidence*100:.2f}")
+        df_details = normalize_confidence(details)
+        if df_details is not None:
+            st.markdown("#### 🔠 Detalhes por Caractere")
+            st.dataframe(df_details, use_container_width=True)
 
-            if details:
-                df_details = pd.DataFrame(details)
-                st.markdown("#### 🔠 Detalhes por Caractere")
-                st.dataframe(df_details, width='stretch')
-
-            st.session_state.history.append({
-                "modo": "upload",
-                "file": uploaded_file.name,
-                "text": decoded_text,
-                "details": details
-            })
-        else:
-            st.info("🔹 Upload apenas visualizado, sem predição disponível.")
+        st.session_state.history.append({
+            "modo": "upload",
+            "file": uploaded_file.name,
+            "text": decoded_text,
+            "details": details,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
 
 # ======================================================
-# ABA 2 - Dataset Local
+# 🧪 ABA 2 - Teste com Dataset Local
 # ======================================================
 with tab2:
     st.subheader("🧪 Teste com Dataset Local")
-    BASE_PATH = "data/samples/"
-    if not os.path.exists(BASE_PATH):
+    BASE_PATH = Path("imagens/archive/samples")
+
+    if not BASE_PATH.exists():
         st.warning("⚠️ Pasta de imagens não encontrada.")
     else:
-        image_files = sorted([
-            f for f in os.listdir(BASE_PATH)
-            if f.lower().endswith((".png", ".jpg", ".jpeg"))
-        ])
-        if image_files:
-            selected_image = st.selectbox("Escolha uma imagem", image_files, key="dataset_select_tab2")
-            image_path = os.path.join(BASE_PATH, selected_image)
-            image = Image.open(image_path)
-            st.image(image, caption=f"Imagem: {selected_image}", width=300)
+        image_files = sorted([f for f in os.listdir(BASE_PATH) if f.lower().endswith((".png", ".jpg", ".jpeg"))])
+        selected_image = st.selectbox("Escolha uma imagem", image_files)
+        image_path = BASE_PATH / selected_image
+        image = Image.open(image_path)
+        st.image(image, caption=f"Imagem: {selected_image}", width=300)
 
-            true_label = os.path.splitext(selected_image)[0]
+        true_label = os.path.splitext(selected_image)[0]
+        predicted_text, details = predictor.predict_with_details(str(image_path))
+        confidence = np.mean([d.get("confidence", 0) for d in details]) if details else 0
 
-            if predictor:
-                predicted_text, details = predictor.predict_with_details(image_path)
-                confidence = np.mean([d.get("confidence", 0) for d in details]) if details else 0
+        logger.info(f"🔍 Dataset: {selected_image} | Previsto: {predicted_text} | Real: {true_label}")
 
-                # Calcula acurácia individual
-                acuracia = 1.0 if predicted_text.lower() == true_label.lower() else 0.0
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Texto Real", true_label)
+        col2.metric("Predição", predicted_text)
+        col3.metric("Confiança (%)", f"{confidence*100:.2f}")
 
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("Texto Real", true_label)
-                col2.metric("Predição", predicted_text)
-                col3.metric("Confiança Média (%)", f"{confidence*100:.2f}")
-                col4.metric("Acurácia", "✅" if acuracia == 1 else "❌")
+        st.write(f"**Resultado:** {'✅ Acertou!' if predicted_text.lower()==true_label.lower() else '❌ Errou!'}")
 
-                if details:
-                    df_details = pd.DataFrame(details)
-                    st.markdown("#### 🔠 Detalhes por Caractere")
-                    st.dataframe(df_details, width='stretch')
+        df_details = normalize_confidence(details)
+        if df_details is not None:
+            st.markdown("#### 🔠 Detalhes por Caractere")
+            st.dataframe(df_details, use_container_width=True)
 
-                # Atualiza histórico para acurácia média
-                st.session_state.history.append({
-                    "modo": "dataset",
-                    "file": selected_image,
-                    "text": predicted_text,
-                    "true_label": true_label,
-                    "details": details,
-                    "acuracia": acuracia,
-                    "confidence": confidence
-                })
-            else:
-                st.info("🔹 Modelo não carregado. Apenas preview da imagem.")
 
 # ======================================================
-# ABA 3 - Debug / Ensino
+# 🧩 ABA 3 - Debug / Ensino
 # ======================================================
 with tab3:
     st.subheader("🧠 Treinamento Assistido / Debug")
-    temp_dir = "data/tmp/"
-    os.makedirs(temp_dir, exist_ok=True)
-
-    predictor_debug = Predictor(debug=True)
-
-    uploaded_file = st.file_uploader(
-        "📤 Faça upload da imagem CAPTCHA:", type=["png", "jpg", "jpeg"]
-    )
+    uploaded_file = st.file_uploader("Envie CAPTCHA (debug)", type=["png", "jpg", "jpeg"], key="debug_upload")
 
     if uploaded_file:
-        safe_name = re.sub(r'[^\w\-_\. ]', '_', uploaded_file.name)
-        img_path = os.path.abspath(os.path.join(temp_dir, safe_name))
-
+        temp_dir = Path("data/tmp")
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        img_path = temp_dir / uploaded_file.name
         with open(img_path, "wb") as f:
             f.write(uploaded_file.read())
 
-        if os.path.exists(img_path):
-            try:
-                result, debug_steps, details = predictor_debug.predict_with_debug(img_path)
-                st.success(f"🔍 Resultado do modelo: **{result}**")
+        # usa predict_with_debug
+        result, debug_steps, details = predictor.predict_with_debug(str(img_path))
+        st.success(f"🔍 Resultado do modelo: **{result}**")
 
-                with st.expander("🖼 Histórico de Processamento"):
-                    cols = st.columns(2)
-                    step_titles = {
-                        "original": "Imagem Original",
-                        "gray": "Convertida para Tons de Cinza",
-                        "clahe": "Contraste Ajustado (CLAHE)",
-                        "blur": "Aplicado Blur/Gaussian",
-                        "thresh": "Binária / Limiarização",
-                    }
+        # Mostrar cada etapa do pré-processamento
+        with st.expander("🖼 Histórico de Pré-processamento"):
+            for i, step in enumerate(debug_steps):
+                # Nome da etapa
+                step_name = step.get("step", f"Step {i}") if isinstance(step, dict) else f"Step {i}"
+                img = step.get("image") if isinstance(step, dict) else step
+                if img is None:
+                    continue
 
-                    for i, (step_name, img) in enumerate(debug_steps.items()):
-                        if isinstance(img, np.ndarray):
-                            if img.dtype in [np.float32, np.float64]:
-                                img = (img * 255).astype(np.uint8)
-                            if len(img.shape) == 2:
-                                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-                            img = Image.fromarray(img)
-                        elif not isinstance(img, Image.Image):
-                            continue
+                # Garantir que a imagem seja RGB para o Streamlit
+                if isinstance(img, np.ndarray):
+                    if img.ndim == 2:  # imagem grayscale
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+                    elif img.shape[2] == 4:  # RGBA -> RGB
+                        img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+                    elif img.shape[2] == 3:  # BGR -> RGB
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    img = Image.fromarray(img)
 
-                        caption = step_titles.get(step_name, step_name)
-                        cols[i % 2].image(img, caption=caption, width=450)
+                st.image(img, caption=f"{i+1}. {step_name}", use_column_width=True)
 
-                with st.expander("📄 Detalhes da predição"):
-                    st.json(details)
 
-            except Exception as e:
-                st.error(f"❌ Erro na predição: {e}")
-        else:
-            st.error(f"❌ Falha ao salvar a imagem em {img_path}")
+        df_details = normalize_confidence(details)
+        if df_details is not None:
+            st.markdown("#### 🔠 Detalhes por Caractere")
+            st.dataframe(df_details, use_container_width=True)
+
 
 # ======================================================
-# ABA 4 - Relatório
+# 📊 ABA 4 - Relatório de Progresso
 # ======================================================
 with tab4:
     st.subheader("📊 Relatório de Progresso")
-    history_file = os.path.join(config["logs_dir"], "evaluation", "report_history.csv")
-    if os.path.exists(history_file):
-        df = pd.read_csv(history_file, on_bad_lines='skip')
-        st.dataframe(df, width='stretch')
+    history_file = Path(config["logs_dir"]) / "evaluation" / "report_history.csv"
+
+    if history_file.exists():
+        df = pd.read_csv(history_file, on_bad_lines="skip")
+        df["accuracy"] = pd.to_numeric(df["accuracy"], errors="coerce")
+        df["loss"] = pd.to_numeric(df["loss"], errors="coerce")
+        st.dataframe(df, use_container_width=True)
     else:
         st.warning("⚠️ Nenhum histórico encontrado.")
 
-# ======================================================
-# Histórico geral exportável
-# ======================================================
-if st.session_state.history and show_history:
-    st.markdown("### 📥 Exportar Histórico Geral")
-    if st.button("Gerar CSV", key="export_csv"):
-        all_records = []
-        for r in st.session_state.history:
-            for d in r.get("details", []):
-                all_records.append({
-                    "modo": r.get("modo"),
-                    "arquivo": r.get("file"),
-                    "texto": r.get("text", r.get("predicted")),
-                    "true_label": r.get("true_label", ""),
-                    "posição": d.get("position"),
-                    "caractere": d.get("char"),
-                    "tipo": d.get("type"),
-                    "confiança": d.get("confidence"),
-                    "acuracia": r.get("acuracia", np.nan) 
-                })
-        df_export = pd.DataFrame(all_records)
-        st.download_button(
-            "⬇️ Baixar CSV",
-            df_export.to_csv(index=False).encode("utf-8"),
-            "historico_predicoes.csv"
-        )
+logger.info("✅ Interface carregada com sucesso.")
