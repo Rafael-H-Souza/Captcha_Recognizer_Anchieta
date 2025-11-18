@@ -1,23 +1,29 @@
 import cv2
+import numpy as np
 
-
-def binarize_image(image, threshold: int = 128):
-    """Aplica binarização a uma imagem em escala de cinza."""
-    _, binary_image = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
-    return binary_image
-
-
-def remove_noise(image):
-    """Remove ruído aplicando um filtro de mediana."""
-    return cv2.medianBlur(image, 3)
-
+IMG_HEIGHT = 50
+IMG_WIDTH = 200
 
 def preprocess_image(image_path: str):
-    """Pipeline completo de pré-processamento para uma única imagem."""
+    """Pré-processamento ideal e seguro para CAPTCHAs."""
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
-        raise FileNotFoundError(f"Imagem não encontrada em {image_path}")
+        raise FileNotFoundError(f"Imagem não encontrada: {image_path}")
 
-    img_no_noise = remove_noise(img)
-    img_binary = binarize_image(img_no_noise, 170)
-    return img_binary
+    # 1) Redimensiona para o tamanho padrão
+    img = cv2.resize(img, (IMG_WIDTH, IMG_HEIGHT), interpolation=cv2.INTER_AREA)
+
+    # 2) Remove ruído leve sem destruir traços
+    img = cv2.GaussianBlur(img, (3, 3), 0)
+
+    # 3) Binarização adaptativa – mais robusta que threshold fixo
+    img = cv2.adaptiveThreshold(
+        img,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        15,
+        8
+    )
+
+    return img

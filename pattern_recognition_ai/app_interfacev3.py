@@ -3,7 +3,7 @@ import streamlit as st
 from PIL import Image
 import pandas as pd
 from src.config.settings import config
-from src.inference.predictor import Predictor
+from src.inference.predictorbackup import Predictor
 import numpy as np
 import cv2
 

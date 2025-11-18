@@ -6,21 +6,21 @@ PYTHON_BIN := python3
 PYTHON_BIN=$(VENV_DIR)/bin/python
 PIP_BIN=$(VENV_DIR)/bin/pip
 # Número de épocas de treinamento do modelo
-EPOCHS ?= 120                 # ⚡ Quantas vezes o modelo irá "ver" todo o dataset durante o treinamento
+EPOCHS ?= 120                
 # Tamanho do batch de imagens por iteração
-BATCH_SIZE ?= 32               # 📦 Quantas imagens são processadas de uma vez pelo modelo durante o treino
+BATCH_SIZE ?= 32               
 # Quantidade total de imagens no dataset
-NUM_IMAGES ?= 50000            # 🖼 Total de imagens que serão usadas para treinar o modelo
+NUM_IMAGES ?= 50000           
 # Acurácia alvo para considerar o treino satisfatório
-TARGET_ACCURACY ?= 0.95        # 🎯 Meta de acurácia (95%) que o modelo deve atingir
+TARGET_ACCURACY ?= 0.95        
 # Prazo final para finalizar o treino ou avaliação
-DEADLINE ?= 2025-11-14         # ⏳ Data limite para concluir o treinamento ou experimento
+DEADLINE ?= 2025-11-14       
 # Caminho da imagem de teste ou exemplo
-IMAGE_PATH ?= five_char_alphanumeric_case_1.png  # 🖼 Arquivo de imagem específico para teste/predição
+IMAGE_PATH ?= five_char_alphanumeric_case_1.png 
 
 
 # -----------------------------------------------------------------------------
-.PHONY: setup install train train-gpu evaluate infer clean freeze all report dataset preprocess report-data interface merge-models
+.PHONY: setup install train train-gpu evaluate infer clean freeze all report dataset preprocess report-data interface merge-models show-model generate-images
 
 all: setup freeze
 
@@ -39,6 +39,22 @@ install:
 train:
 	@echo "🚀 Iniciando treinamento do modelo (CPU)..."
 	PYTHONPATH=$(CURDIR) $(PYTHON_BIN) scripts/train.py --epochs $(EPOCHS) --batch-size $(BATCH_SIZE)
+	@echo "✅ Treinamento concluído. Executando avaliação pós-treino..."
+	$(MAKE) evaluate
+
+train-parallel:
+	@echo "⚡ Iniciando TREINO PARALELO (CPU Turbo)..."
+	PYTHONPATH=$(CURDIR) $(PYTHON_BIN) scripts/train.py --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) > logs/train_parallel.log 2>&1 &
+	@echo "🔥 Treino paralelo rodando em background! (logs/train_parallel.log)"
+	
+train-parallel-live:
+	@echo "⚡ Iniciando treino paralelo (LIVE)..."
+	(PYTHONPATH=$(CURDIR) $(PYTHON_BIN) scripts/train.py --epochs $(EPOCHS) --batch-size $(BATCH_SIZE)) &
+
+
+show-model:
+	@echo "🚀 Iniciando treinamento do modelo (CPU)..."
+	PYTHONPATH=$(CURDIR) $(PYTHON_BIN) scripts/show_models.py --epochs $(EPOCHS) --batch-size $(BATCH_SIZE)
 	@echo "✅ Treinamento concluído. Executando avaliação pós-treino..."
 	$(MAKE) evaluate
 
@@ -75,6 +91,11 @@ infer:
 dataset:
 	@echo "🗂️ Gerando dataset sintético de CAPTCHAs..."
 	PYTHONPATH=$(CURDIR) $(PYTHON_BIN) scripts/generate_dataset.py --num-images $(NUM_IMAGES)
+
+generate-images:
+	@echo "🖼️ Gerando imagens pré-processadas em debug/processed_imgs/..."
+	PYTHONPATH=$(CURDIR) $(PYTHON_BIN) scripts/generate_preprocessed_images.py
+
 
 preprocess:
 	@echo "🧼 Pré-processando imagens..."
